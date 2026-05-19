@@ -53,8 +53,13 @@ const TRAINING_DATA = [
 ];
 
 const LABELS = [
+  // HEALTHY (12)
   0,0,0,0,0,0,0,0,0,0,0,0,
+
+  // WARNING (10)
   1,1,1,1,1,1,1,1,1,1,
+
+  // CRITICAL (16)
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2
 ];
 
@@ -83,7 +88,7 @@ async function trainModel() {
     });
 
     model.compile({
-      optimizer: tf.train.adam(0.01),
+      optimizer: tf.train.adam(0.001),
       loss: 'sparseCategoricalCrossentropy',
       metrics: ['accuracy']
     });
@@ -92,7 +97,7 @@ async function trainModel() {
     const ys = tf.tensor1d(LABELS, 'float32');
 
     const history = await model.fit(xs, ys, {
-      epochs: 200,
+      epochs: 400,
       batchSize: 8,
       shuffle: true,
       verbose: 0
@@ -124,6 +129,10 @@ async function predict(freq, deviation, accelMag) {
     output.dispose();
 
     const maxIdx = probs.indexOf(Math.max(...probs));
+    console.log(
+      `[ML DEBUG] freq=${freq} dev=${deviation}
+       probs=${JSON.stringify(probs)}`
+    );
 
     return {
       class:       CLASS_NAMES[maxIdx],

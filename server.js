@@ -148,27 +148,32 @@ app.post('/data', async (req, res) => {
           deviation,
           mag
         );
+     mlResult = {
+      class:
+        rawML?.class || mlClass,
 
-      mlResult = {
-        class: mlClass,
-        confidence,
-        estimatedDamage,
+     confidence:
+        rawML?.confidence || confidence,
 
-        probabilities:
-          rawML?.probabilities || {
-            HEALTHY:
-              mlClass === 'HEALTHY'
-                ? confidence : 1,
+    estimatedDamage:
+     rawML?.estimatedDamage ||
+     estimatedDamage,
 
-            WARNING:
-              mlClass === 'WARNING'
-                ? confidence : 1,
+    probabilities:
+      rawML?.probabilities || {
+      HEALTHY:
+        mlClass === 'HEALTHY'
+          ? 99 : 1,
 
-            CRITICAL:
-              mlClass === 'CRITICAL'
-                ? confidence : 1
-          }
-      };
+      WARNING:
+        mlClass === 'WARNING'
+          ? 95 : 1,
+
+      CRITICAL:
+        mlClass === 'CRITICAL'
+          ? 98 : 1
+    }
+};
 
       console.log(
         `[ML FIXED] ${mlResult.class} (${mlResult.confidence}%)`

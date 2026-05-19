@@ -1,10 +1,10 @@
-const express    = require('express');
-const http       = require('http');
-const WebSocket  = require('ws');
-const path       = require('path');
-const https      = require('https');
+const express   = require('express');
+const http      = require('http');
+const WebSocket = require('ws');
+const path      = require('path');
+const https     = require('https');
 const nodemailer = require('nodemailer');
-const mlModel    = require('./ml_model');
+const mlModel   = require('./ml_model');
 
 const app    = express();
 const server = http.createServer(app);
@@ -12,285 +12,242 @@ const wss    = new WebSocket.Server({ server, perMessageDeflate: false });
 
 const PORT = process.env.PORT || 3000;
 
-const GOOGLE_SHEET_URL = 'https://script.google.com/macros/s/AKfycbwFBwZc868SvpnuvSAYlpoX2q3WneREYoh9Gmdr-xiZ3ljGvPR64k2rVZB0oDSYl6LY/exec';
+// ── Google Sheets ─────────────────────────────────────────────────
+const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwFBwZc868SvpnuvSAYlpoX2q3WneREYoh9Gmdr-xiZ3ljGvPR64k2rVZB0oDSYl6LY/exec';
 
-const EMAIL_FROM     = process.env.EMAIL_FROM     || 'your_gmail@gmail.com';
-const EMAIL_TO       = process.env.EMAIL_TO       || 'your_gmail@gmail.com';
-const EMAIL_PASSWORD = process.env.EMAIL_PASSWORD || 'your16digitpassword';
+// ── Email config — port 465 SSL works on Render ───────────────────
+const EMAIL_FROM = process.env.EMAIL_FROM     || 'n60760942@gmail.com';
+const EMAIL_TO   = process.env.EMAIL_TO       || 'n60760942@gmail.com';
+const EMAIL_PASS = process.env.EMAIL_PASSWORD || 'gzwmujtlerotdfgn';
 
-// ── FIXED email transporter ───────────────────────────────────────
 const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 587,
-  secure: false,
+  host:   'smtp.gmail.com',
+  port:   465,
+  secure: true,
   auth: {
     user: EMAIL_FROM,
-    pass: EMAIL_PASSWORD
-  },
-  tls: {
-    rejectUnauthorized: false
+    pass: EMAIL_PASS
   }
 });
 
-// Verify email on startup
-transporter.verify((error) => {
-  if (error) {
-    console.log('[Email] Setup error:', error.message);
-    console.log('[Email] Check your Gmail app password!');
-  } else {
-    console.log('[Email] Ready to send alerts!');
-  }
+transporter.verify((err) => {
+  if (err) console.log('[Email] ERROR:', err.message);
+  else     console.log('[Email] Ready to send!');
 });
 
-let lastEmailAlertState = 'IDLE';
-let lastEmailTime       = 0;
-const EMAIL_COOLDOWN_MS = 60000;
-
-// ── ML model ──────────────────────────────────────────────────────
+// ── ML setup ──────────────────────────────────────────────────────
 let mlReady = false;
 mlModel.trainModel().then(() => {
   mlReady = true;
-  console.log('[ML] Model trained and ready!');
+  console.log('[ML] Model ready!');
 }).catch(err => {
-  console.log('[ML] Training error:', err.message);
+  console.log('[ML] Error:', err.message);
 });
+
+// ── State ─────────────────────────────────────────────────────────
+let lastEmailState = 'IDLE';
+let lastEmailTime  = 0;
+let lastLogTime    = 0;
+const EMAIL_COOLDOWN = 60000;
 
 app.use(express.json());
 
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'dashboard.html'));
-});
-
-app.get('/mobile', (req, res) => {
-  res.sendFile(path.join(__dirname, 'mobile.html'));
-});
+// ── Routes ────────────────────────────────────────────────────────
+app.get('/',       (req, res) => res.sendFile(path.join(__dirname, 'dashboard.html')));
+app.get('/mobile', (req, res) => res.sendFile(path.join(__dirname, 'mobile.html')));
 
 app.post('/data', async (req, res) => {
-  const body      = req.body;
-  const freq      = body.freq;
-  const ax        = body.ax      || 0;
-  const ay        = body.ay      || 0;
-  const az        = body.az      || 9.81;
-  const ts        = body.ts;
-  const alert     = body.alert   || 'IDLE';
-  const deviation = body.deviation || 0;
-  const baseline  = body.baseline  || 83.87;
+  const { freq, ax=0, ay=0, az=9.81, ts, alert='IDLE', deviation=0, baseline=83.87 } = req.body;
 
-  if (freq === undefined) {
-    return res.status(400).json({ error: 'Missing freq field' });
-  }
+  if (freq === undefined) return res.status(400).json({ error: 'Missing freq' });
 
-  // ── ML prediction ────────────────────────────────────────────────
   let mlResult = null;
+
   if (mlReady && freq > 5 && alert !== 'IDLE' && alert !== 'MEASURING') {
-    const accelMag = Math.sqrt(ax*ax + ay*ay + az*az);
-    mlResult = await mlModel.predict(freq, deviation, accelMag);
+    const mag = Math.sqrt(ax*ax + ay*ay + az*az);
+    mlResult  = await mlModel.predict(freq, deviation, mag);
     if (mlResult) {
-      console.log(`[ML] Prediction: ${mlResult.class} (${mlResult.confidence}% confidence)`);
-      console.log(`[ML] Estimated damage: ${mlResult.estimatedDamage.level} — ${mlResult.estimatedDamage.holeSize}`);
+      console.log(`[ML] ${mlResult.class} (${mlResult.confidence}%) — ${mlResult.estimatedDamage.level}`);
     }
   }
 
   const payload = JSON.stringify({
-    freq, ax, ay, az, ts,
-    alert, deviation, baseline,
+    freq, ax, ay, az, ts, alert, deviation, baseline,
     serverTs: Date.now(),
     ml: mlResult
   });
 
-  console.log(`[${new Date().toLocaleTimeString()}] freq=${freq} Hz  alert=${alert}  dev=${deviation}%${mlResult ? '  ML:' + mlResult.class : ''}`);
+  console.log(`[${new Date().toLocaleTimeString()}] freq=${freq}Hz alert=${alert} dev=${deviation}%`);
 
-  wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(payload);
-    }
+  wss.clients.forEach(c => {
+    if (c.readyState === WebSocket.OPEN) c.send(payload);
   });
 
   if (alert !== 'IDLE' && alert !== 'MEASURING') {
-    checkAndSendEmail(alert, freq, deviation, ax, ay, az, mlResult);
-    logToGoogleSheets({ freq, ax, ay, az, alert, deviation, baseline, ml: mlResult ? mlResult.class : 'N/A' });
+    handleEmail(alert, freq, deviation, ax, ay, az, mlResult);
+    logSheets({ freq, ax, ay, az, alert, deviation, baseline, ml: mlResult ? mlResult.class : 'N/A' });
   }
 
   res.json({ status: 'ok', ml: mlResult });
 });
 
-function checkAndSendEmail(alertState, freq, deviation, ax, ay, az, mlResult) {
+// ── Email ─────────────────────────────────────────────────────────
+function handleEmail(alertState, freq, deviation, ax, ay, az, ml) {
   const now = Date.now();
-  if (alertState === lastEmailAlertState) return;
-  if (now - lastEmailTime < EMAIL_COOLDOWN_MS) return;
+  if (alertState === lastEmailState) return;
+  if (now - lastEmailTime < EMAIL_COOLDOWN) return;
 
   if (alertState === 'CRITICAL' || alertState === 'WARNING') {
-    lastEmailAlertState = alertState;
-    lastEmailTime       = now;
-    sendAlertEmail(alertState, freq, deviation, ax, ay, az, mlResult);
+    lastEmailState = alertState;
+    lastEmailTime  = now;
+    sendAlert(alertState, freq, deviation, ax, ay, az, ml);
   } else if (alertState === 'NORMAL' &&
-             lastEmailAlertState !== 'NORMAL' &&
-             lastEmailAlertState !== 'IDLE') {
-    lastEmailAlertState = alertState;
-    sendRecoveryEmail(freq);
+             lastEmailState !== 'NORMAL' &&
+             lastEmailState !== 'IDLE') {
+    lastEmailState = alertState;
+    sendRecovery(freq);
   }
 }
 
-function sendAlertEmail(alertState, freq, deviation, ax, ay, az, mlResult) {
-  const isCritical = alertState === 'CRITICAL';
-  const emoji      = isCritical ? '🔴' : '🟡';
-  const subject    = `${emoji} GFRP SHM ${alertState} — Freq=${freq} Hz`;
+function sendAlert(alertState, freq, deviation, ax, ay, az, ml) {
+  const crit    = alertState === 'CRITICAL';
+  const color   = crit ? '#ff4a4a' : '#f5a623';
+  const emoji   = crit ? '🔴' : '🟡';
+  const subject = `${emoji} GFRP SHM ${alertState} — Freq=${freq} Hz`;
 
-  const mlSection = mlResult ? `
-    <tr style="background:#e8f4f8;border-bottom:1px solid #eee;">
-      <td style="padding:10px;color:#666;font-weight:bold;">AI Prediction</td>
-      <td style="padding:10px;color:#0066cc;font-weight:bold;">
-        ${mlResult.class} (${mlResult.confidence}% confidence)
-      </td>
+  const mlRows = ml ? `
+    <tr>
+      <td style="padding:10px;color:#666;font-weight:bold;background:#e8f4f8">AI Class</td>
+      <td style="padding:10px;color:#0066cc;font-weight:bold;background:#e8f4f8">${ml.class} (${ml.confidence}% confidence)</td>
     </tr>
-    <tr style="background:#fff;border-bottom:1px solid #eee;">
-      <td style="padding:10px;color:#666;font-weight:bold;">Estimated Damage</td>
-      <td style="padding:10px;color:#333;">
-        ${mlResult.estimatedDamage.level} — ${mlResult.estimatedDamage.holeSize}
-      </td>
+    <tr>
+      <td style="padding:10px;color:#666;font-weight:bold;">Damage Estimate</td>
+      <td style="padding:10px;">${ml.estimatedDamage.level} — ${ml.estimatedDamage.holeSize}</td>
     </tr>
-    <tr style="background:#e8f4f8;">
-      <td style="padding:10px;color:#666;font-weight:bold;">ML Probabilities</td>
-      <td style="padding:10px;color:#333;font-size:12px;">
-        Healthy: ${mlResult.probabilities.HEALTHY}% |
-        Warning: ${mlResult.probabilities.WARNING}% |
-        Critical: ${mlResult.probabilities.CRITICAL}%
+    <tr>
+      <td style="padding:10px;color:#666;font-weight:bold;background:#f9f9f9">ML Probabilities</td>
+      <td style="padding:10px;font-size:12px;background:#f9f9f9">
+        Healthy: ${ml.probabilities.HEALTHY}% |
+        Warning: ${ml.probabilities.WARNING}% |
+        Critical: ${ml.probabilities.CRITICAL}%
       </td>
     </tr>` : '';
 
   const html = `
-    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
-      <div style="background:${isCritical ? '#ff4a4a' : '#f5a623'};color:white;padding:20px;border-radius:8px 8px 0 0;">
-        <h2 style="margin:0;">${emoji} ${alertState} — GFRP Plate SHM</h2>
-        <p style="margin:5px 0 0 0;opacity:0.9;">${new Date().toLocaleString()}</p>
+  <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+    <div style="background:${color};color:white;padding:20px;border-radius:8px 8px 0 0;">
+      <h2 style="margin:0">${emoji} ${alertState} — GFRP Plate SHM</h2>
+      <p style="margin:5px 0 0;opacity:.9">${new Date().toLocaleString()}</p>
+    </div>
+    <div style="padding:20px;border:1px solid #ddd;border-top:none;border-radius:0 0 8px 8px;background:#f9f9f9">
+      <table style="width:100%;border-collapse:collapse;background:#fff;border-radius:6px;overflow:hidden;">
+        <tr>
+          <td style="padding:10px;color:#666;font-weight:bold;">M1 Frequency</td>
+          <td style="padding:10px;color:${color};font-size:20px;font-weight:bold;">${freq} Hz</td>
+        </tr>
+        <tr>
+          <td style="padding:10px;color:#666;font-weight:bold;background:#f9f9f9">Baseline</td>
+          <td style="padding:10px;background:#f9f9f9">83.87 Hz — FFFF No hole 0°</td>
+        </tr>
+        <tr>
+          <td style="padding:10px;color:#666;font-weight:bold;">Deviation</td>
+          <td style="padding:10px;color:${color};font-weight:bold;">${deviation}%</td>
+        </tr>
+        ${mlRows}
+        <tr>
+          <td style="padding:10px;color:#666;font-weight:bold;background:#f9f9f9">Acceleration</td>
+          <td style="padding:10px;background:#f9f9f9">X=${ax} Y=${ay} Z=${az} m/s²</td>
+        </tr>
+      </table>
+      <div style="margin-top:16px;padding:12px;background:#fff3cd;border-radius:6px;border:1px solid #ffc107;">
+        <strong>Action required:</strong> Inspect GFRP plate immediately.
       </div>
-      <div style="background:#f9f9f9;padding:20px;border-radius:0 0 8px 8px;border:1px solid #ddd;">
-        <table style="width:100%;border-collapse:collapse;">
-          <tr style="background:#fff;border-bottom:1px solid #eee;">
-            <td style="padding:10px;color:#666;font-weight:bold;">M1 Frequency</td>
-            <td style="padding:10px;color:${isCritical ? '#ff4a4a' : '#f5a623'};font-size:20px;font-weight:bold;">${freq} Hz</td>
-          </tr>
-          <tr style="background:#f9f9f9;border-bottom:1px solid #eee;">
-            <td style="padding:10px;color:#666;font-weight:bold;">Baseline M1</td>
-            <td style="padding:10px;">83.87 Hz — FFFF No hole 0°</td>
-          </tr>
-          <tr style="background:#fff;border-bottom:1px solid #eee;">
-            <td style="padding:10px;color:#666;font-weight:bold;">Deviation</td>
-            <td style="padding:10px;color:${isCritical ? '#ff4a4a' : '#f5a623'};font-weight:bold;">${deviation}%</td>
-          </tr>
-          ${mlSection}
-          <tr style="background:#fff;">
-            <td style="padding:10px;color:#666;font-weight:bold;">Acceleration</td>
-            <td style="padding:10px;">X=${ax} Y=${ay} Z=${az} m/s²</td>
-          </tr>
-        </table>
-        <div style="margin-top:16px;padding:12px;background:#fff3cd;border-radius:6px;border:1px solid #ffc107;">
-          <strong>Action required:</strong> Inspect GFRP plate immediately.
-        </div>
-        <p style="color:#999;font-size:12px;margin-top:16px;">
-          GFRP SHM · MTech Project · ESP8266 + ADXL345 + AI/ML
-        </p>
-      </div>
-    </div>`;
+      <p style="color:#999;font-size:11px;margin-top:16px;">
+        GFRP SHM · MTech Project · ESP8266 + ADXL345 + AI/ML
+      </p>
+    </div>
+  </div>`;
 
   transporter.sendMail({ from: EMAIL_FROM, to: EMAIL_TO, subject, html }, (err, info) => {
-    if (err) {
-      console.log('[Email] Error:', err.message);
-    } else {
-      console.log(`[Email] ${alertState} alert sent! ID: ${info.messageId}`);
-    }
+    if (err) console.log('[Email] Send error:', err.message);
+    else     console.log('[Email] Sent! ID:', info.messageId);
   });
 }
 
-function sendRecoveryEmail(freq) {
+function sendRecovery(freq) {
   transporter.sendMail({
-    from: EMAIL_FROM,
-    to: EMAIL_TO,
-    subject: `✅ GFRP SHM — Returned to normal (${freq} Hz)`,
-    html: `<p>Plate frequency returned to normal.</p>
-           <p><strong>Current: ${freq} Hz</strong></p>
-           <p>Baseline: 83.87 Hz · Normal: 79.68–88.06 Hz</p>`
+    from:    EMAIL_FROM,
+    to:      EMAIL_TO,
+    subject: `✅ GFRP SHM — Back to normal (${freq} Hz)`,
+    html:    `<p>Plate returned to normal.</p>
+              <p><strong>Current: ${freq} Hz</strong></p>
+              <p>Baseline: 83.87 Hz · Normal: 79.68–88.06 Hz</p>`
   }, (err, info) => {
-    if (err) console.log('[Email] Error:', err.message);
-    else console.log('[Email] Recovery sent! ID:', info.messageId);
+    if (err) console.log('[Email] Send error:', err.message);
+    else     console.log('[Email] Recovery sent! ID:', info.messageId);
   });
 }
 
-let lastLogTime = 0;
-
-function logToGoogleSheets(data) {
+// ── Google Sheets ─────────────────────────────────────────────────
+function logSheets(data) {
   const now = Date.now();
   if (now - lastLogTime < 5000) return;
   lastLogTime = now;
 
   const body = JSON.stringify(data);
-  const url  = new URL(GOOGLE_SHEET_URL);
 
-  const options = {
-    hostname: url.hostname,
-    path: url.pathname + url.search,
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(body)
-    }
-  };
-
-  function makeRequest(opts, redirectCount) {
-    if (redirectCount > 5) return;
-    const req = https.request(opts, (res) => {
+  function req(opts, redirects) {
+    if (redirects > 5) return;
+    const r = https.request(opts, res => {
       let raw = '';
-      res.on('data', chunk => raw += chunk);
+      res.on('data', c => raw += c);
       res.on('end', () => {
         if (res.statusCode === 301 || res.statusCode === 302) {
-          const redirectUrl = new URL(res.headers.location);
-          makeRequest({
-            hostname: redirectUrl.hostname,
-            path: redirectUrl.pathname + redirectUrl.search,
-            method: 'GET',
-            headers: {}
-          }, redirectCount + 1);
+          const u = new URL(res.headers.location);
+          req({ hostname: u.hostname, path: u.pathname + u.search, method: 'GET', headers: {} }, redirects + 1);
         } else {
-          console.log('[Sheets] Logged OK');
+          console.log('[Sheets] OK');
         }
       });
     });
-    req.on('error', err => console.log('[Sheets] Error:', err.message));
-    if (opts.method === 'POST') req.write(body);
-    req.end();
+    r.on('error', e => console.log('[Sheets] Error:', e.message));
+    if (opts.method === 'POST') r.write(body);
+    r.end();
   }
 
-  makeRequest(options, 0);
+  const u = new URL(SHEET_URL);
+  req({
+    hostname: u.hostname,
+    path:     u.pathname + u.search,
+    method:   'POST',
+    headers:  { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+  }, 0);
 }
 
+// ── WebSocket ─────────────────────────────────────────────────────
 wss.on('connection', ws => {
   console.log('Dashboard connected.');
 
-  const pingInterval = setInterval(() => {
+  const ping = setInterval(() => {
     if (ws.readyState === WebSocket.OPEN) ws.ping();
-  }, 30000);
+  }, 25000);
 
-  ws.on('pong', () => console.log('Pong received'));
-  ws.on('close', () => {
-    clearInterval(pingInterval);
-    console.log('Dashboard disconnected.');
-  });
-  ws.on('error', (err) => {
-    clearInterval(pingInterval);
-    console.log('WS error:', err.message);
-  });
+  ws.on('pong',  ()    => console.log('Pong OK'));
+  ws.on('close', ()    => { clearInterval(ping); console.log('Dashboard disconnected.'); });
+  ws.on('error', (err) => { clearInterval(ping); console.log('WS error:', err.message); });
 
   ws.send(JSON.stringify({ type: 'connected' }));
 });
 
-wss.on('error', (err) => console.log('WS server error:', err.message));
-
+// ── Render keepalive ──────────────────────────────────────────────
+const RENDER_URL = process.env.RENDER_URL || 'https://ai-shm.onrender.com';
 setInterval(() => {
-  https.get('https://gfrp-shm.onrender.com', () => {}).on('error', () => {});
+  https.get(RENDER_URL, () => {}).on('error', () => {});
+  console.log('[Keepalive] ping sent');
 }, 4 * 60 * 1000);
 
 server.listen(PORT, () => {
   console.log(`SHM server running on port ${PORT}`);
-  console.log(`Email → ${EMAIL_TO}`);
-  console.log(`Google Sheets logging active`);
+  console.log(`Email from: ${EMAIL_FROM} → ${EMAIL_TO}`);
+  console.log(`Render URL: ${RENDER_URL}`);
 });

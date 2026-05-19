@@ -1,0 +1,15 @@
+{
+  "name": "gfrp-shm",
+  "version": "2.0.0",
+  "description": "GFRP SHM with AI/ML",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.14.2",
+    "nodemailer": "^6.9.4",
+    "@tensorflow/tfjs-node": "^4.15.0"
+  }
+}

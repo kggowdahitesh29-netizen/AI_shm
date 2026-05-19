@@ -89,7 +89,7 @@ async function trainModel() {
     });
 
     const xs = tf.tensor2d(TRAINING_DATA.map(d => normalize(d)));
-    const ys = tf.tensor1d(LABELS, 'int32');
+    const ys = tf.tensor1d(LABELS, 'float32');
 
     const history = await model.fit(xs, ys, {
       epochs: 200,

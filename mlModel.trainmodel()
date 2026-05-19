@@ -1,8 +1,0 @@
-let mlReady = false;
-
-mlModel.trainModel().then(() => {
-  mlReady = true;
-  console.log('[ML] Model ready!');
-}).catch(err => {
-  console.log('[ML] Error:', err.message);
-});

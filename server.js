@@ -8,6 +8,7 @@ const mlModel = require('./ml_model');
 
 const app = express();
 const server = http.createServer(app);
+
 const wss = new WebSocket.Server({
   server,
   perMessageDeflate: false
@@ -17,17 +18,17 @@ const PORT = process.env.PORT || 3000;
 
 // ================= GOOGLE SHEETS =================
 const SHEET_URL =
-'https://script.google.com/macros/s/AKfycbwFBwZc868SvpnuvSAYlpoX2q3WneREYoh9Gmdr-xiZ3ljGvPR64k2rVZB0oDSYl6LY/exec';
+  'https://script.google.com/macros/s/AKfycbwFBwZc868SvpnuvSAYlpoX2q3WneREYoh9Gmdr-xiZ3ljGvPR64k2rVZB0oDSYl6LY/exec';
 
 // ================= EMAIL =================
 const EMAIL_FROM =
-process.env.EMAIL_FROM || 'n60760942@gmail.com';
+  process.env.EMAIL_FROM || 'n60760942@gmail.com';
 
 const EMAIL_TO =
-process.env.EMAIL_TO || 'n60760942@gmail.com';
+  process.env.EMAIL_TO || 'n60760942@gmail.com';
 
 const EMAIL_PASS =
-process.env.EMAIL_PASSWORD || 'YOUR_APP_PASSWORD';
+  process.env.EMAIL_PASSWORD || 'YOUR_APP_PASSWORD';
 
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
@@ -114,25 +115,25 @@ app.post('/data', async (req, res) => {
   if (absDev <= 5) {
     mlClass = 'HEALTHY';
     confidence = 99;
-  }
-  else if (absDev <= 15) {
+  } else if (absDev <= 15) {
     mlClass = 'WARNING';
     confidence = 95;
+
     estimatedDamage = {
       level: 'Possible damage',
       holeSize: '20–40 mm'
     };
-  }
-  else {
+  } else {
     mlClass = 'CRITICAL';
     confidence = 98;
+
     estimatedDamage = {
       level: 'Severe damage',
       holeSize: '60+ mm'
     };
   }
 
-  // ===== OPTIONAL ML PROBABILITIES =====
+  // ===== ML PREDICTION =====
   if (mlReady && freq > 5) {
     try {
 
@@ -142,38 +143,38 @@ app.post('/data', async (req, res) => {
         az * az
       );
 
-      const rawML =
-        await mlModel.predict(
-          freq,
-          deviation,
-          mag
-        );
-     mlResult = {
-      class:
-        rawML?.class || mlClass,
+      const rawML = await mlModel.predict(
+        freq,
+        deviation,
+        mag
+      );
 
-     confidence:
-        rawML?.confidence || confidence,
+      mlResult = {
+        class:
+          rawML?.class || mlClass,
 
-    estimatedDamage:
-     rawML?.estimatedDamage ||
-     estimatedDamage,
+        confidence:
+          rawML?.confidence || confidence,
 
-    probabilities:
-      rawML?.probabilities || {
-      HEALTHY:
-        mlClass === 'HEALTHY'
-          ? 99 : 1,
+        estimatedDamage:
+          rawML?.estimatedDamage ||
+          estimatedDamage,
 
-      WARNING:
-        mlClass === 'WARNING'
-          ? 95 : 1,
+        probabilities:
+          rawML?.probabilities || {
+            HEALTHY:
+              mlClass === 'HEALTHY'
+                ? 99 : 1,
 
-      CRITICAL:
-        mlClass === 'CRITICAL'
-          ? 98 : 1
-    }
-};
+            WARNING:
+              mlClass === 'WARNING'
+                ? 95 : 1,
+
+            CRITICAL:
+              mlClass === 'CRITICAL'
+                ? 98 : 1
+          }
+      };
 
       console.log(
         `[ML FIXED] ${mlResult.class} (${mlResult.confidence}%)`
@@ -205,13 +206,13 @@ app.post('/data', async (req, res) => {
   );
 
   // ===== SEND TO DASHBOARD =====
-  wss.clients.forEach(c => {
-    if (c.readyState === WebSocket.OPEN) {
-      c.send(payload);
+  wss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(payload);
     }
   });
 
-  // ===== SHEETS =====
+  // ===== GOOGLE SHEETS =====
   logSheets({
     freq,
     ax,
@@ -243,33 +244,27 @@ function logSheets(data) {
 
   lastLogTime = now;
 
-  const body =
-    JSON.stringify(data);
+  const body = JSON.stringify(data);
 
-  const url =
-    new URL(SHEET_URL);
+  const url = new URL(SHEET_URL);
 
-  const req =
-    https.request({
-      hostname: url.hostname,
-      path: url.pathname + url.search,
-      method: 'POST',
-      headers: {
-        'Content-Type':
-          'application/json',
+  const req = https.request({
+    hostname: url.hostname,
+    path: url.pathname + url.search,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body)
+    }
 
-        'Content-Length':
-          Buffer.byteLength(body)
-      }
+  }, res => {
 
-    }, res => {
+    res.on('data', () => {});
 
-      res.on('data', () => {});
-
-      res.on('end', () => {
-        console.log('[Sheets] OK');
-      });
+    res.on('end', () => {
+      console.log('[Sheets] OK');
     });
+  });
 
   req.on('error', e => {
     console.log(
@@ -285,21 +280,17 @@ function logSheets(data) {
 // ================= WEBSOCKET =================
 wss.on('connection', ws => {
 
-  console.log(
-    'Dashboard connected'
-  );
+  console.log('Dashboard connected');
 
-  ws.send(
-    JSON.stringify({
-      type: 'connected'
-    })
-  );
+  ws.send(JSON.stringify({
+    type: 'connected'
+  }));
 });
 
 // ================= KEEPALIVE =================
 const RENDER_URL =
-process.env.RENDER_URL ||
-'https://ai-shm.onrender.com';
+  process.env.RENDER_URL ||
+  'https://ai-shm.onrender.com';
 
 setInterval(() => {
 

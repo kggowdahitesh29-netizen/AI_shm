@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>GFRP SHM Mobile</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <style>
+        body{
+            font-family: Arial;
+            background:#111827;
+            color:white;
+            text-align:center;
+            padding:20px;
+        }
+
+        .card{
+            background:#1f2937;
+            padding:20px;
+            border-radius:15px;
+            margin:15px auto;
+            max-width:400px;
+        }
+
+        .freq{
+            font-size:48px;
+            color:#00e676;
+            font-weight:bold;
+        }
+
+        .alert{
+            font-size:30px;
+            font-weight:bold;
+        }
+    </style>
+</head>
+
+<body>
+
+<h1>GFRP SHM Dashboard</h1>
+
+<div class="card">
+    <h2>Frequency</h2>
+    <div id="freq" class="freq">0</div>
+    <p>Hz</p>
+</div>
+
+<div class="card">
+    <h2>Status</h2>
+    <div id="alert" class="alert">Waiting...</div>
+</div>
+
+<script>
+const ws = new WebSocket(
+    location.protocol === 'https:'
+    ? 'wss://' + location.host
+    : 'ws://' + location.host
+);
+
+ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+
+    if(data.freq !== undefined){
+        document.getElementById('freq').innerText =
+            Number(data.freq).toFixed(2);
+
+        document.getElementById('alert').innerText =
+            data.alert || 'IDLE';
+    }
+};
+</script>
+
+</body>
+</html>

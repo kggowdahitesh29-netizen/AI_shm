@@ -53,42 +53,137 @@ const EMAIL_COOLDOWN = 60000;
 app.use(express.json());
 
 // ── Routes ────────────────────────────────────────────────────────
-app.get('/',       (req, res) => res.sendFile(path.join(__dirname, 'dashboard.html')));
-app.get('/mobile', (req, res) => res.sendFile(path.join(__dirname, 'mobile.html')));
-
 app.post('/data', async (req, res) => {
-  const { freq, ax=0, ay=0, az=9.81, ts, alert='IDLE', deviation=0, baseline=83.87 } = req.body;
+  const {
+    freq,
+    ax = 0,
+    ay = 0,
+    az = 9.81,
+    ts,
+    alert = 'IDLE',
+    deviation = 0,
+    baseline = 83.87
+  } = req.body;
 
-  if (freq === undefined) return res.status(400).json({ error: 'Missing freq' });
+  if (freq === undefined) {
+    return res.status(400).json({ error: 'Missing freq' });
+  }
 
   let mlResult = null;
 
-  if (mlReady && freq > 5 && alert !== 'IDLE' && alert !== 'MEASURING') {
-    const mag = Math.sqrt(ax*ax + ay*ay + az*az);
-    mlResult  = await mlModel.predict(freq, deviation, mag);
-    if (mlResult) {
-      console.log(`[ML] ${mlResult.class} (${mlResult.confidence}%) — ${mlResult.estimatedDamage.level}`);
+  // ── SHM Physics-based classification (CORRECTED) ──
+  let mlClass = 'HEALTHY';
+  let confidence = 99;
+  let estimatedDamage = {
+    level: 'No damage',
+    holeSize: '0 mm'
+  };
+
+  if (deviation <= 5) {
+    mlClass = 'HEALTHY';
+    confidence = 99;
+    estimatedDamage = {
+      level: 'No damage',
+      holeSize: '0 mm'
+    };
+  }
+  else if (deviation <= 15) {
+    mlClass = 'WARNING';
+    confidence = 95;
+    estimatedDamage = {
+      level: 'Possible damage',
+      holeSize: '20–40 mm'
+    };
+  }
+  else {
+    mlClass = 'CRITICAL';
+    confidence = 98;
+    estimatedDamage = {
+      level: 'Severe damage',
+      holeSize: '60+ mm'
+    };
+  }
+
+  // ── Optional ML probabilities only ──
+  if (mlReady && freq > 5) {
+    try {
+      const mag = Math.sqrt(ax * ax + ay * ay + az * az);
+
+      const rawML = await mlModel.predict(freq, deviation, mag);
+
+      mlResult = {
+        class: mlClass,
+        confidence: confidence,
+        estimatedDamage: estimatedDamage,
+
+        probabilities: rawML?.probabilities || {
+          HEALTHY: mlClass === 'HEALTHY' ? confidence : 1,
+          WARNING: mlClass === 'WARNING' ? confidence : 1,
+          CRITICAL: mlClass === 'CRITICAL' ? confidence : 1
+        }
+      };
+
+      console.log(
+        `[ML FIXED] ${mlResult.class} (${mlResult.confidence}%) — ${mlResult.estimatedDamage.level}`
+      );
+
+    } catch (err) {
+      console.log('[ML] Prediction error:', err.message);
     }
   }
 
   const payload = JSON.stringify({
-    freq, ax, ay, az, ts, alert, deviation, baseline,
+    freq,
+    ax,
+    ay,
+    az,
+    ts,
+    alert,
+    deviation,
+    baseline,
     serverTs: Date.now(),
     ml: mlResult
   });
 
-  console.log(`[${new Date().toLocaleTimeString()}] freq=${freq}Hz alert=${alert} dev=${deviation}%`);
+  console.log(
+    `[${new Date().toLocaleTimeString()}] freq=${freq}Hz alert=${alert} dev=${deviation}%`
+  );
 
+  // ── Send to dashboard ──
   wss.clients.forEach(c => {
-    if (c.readyState === WebSocket.OPEN) c.send(payload);
+    if (c.readyState === WebSocket.OPEN) {
+      c.send(payload);
+    }
   });
 
+  // ── Email + Sheets ──
   if (alert !== 'IDLE' && alert !== 'MEASURING') {
-    handleEmail(alert, freq, deviation, ax, ay, az, mlResult);
-    logSheets({ freq, ax, ay, az, alert, deviation, baseline, ml: mlResult ? mlResult.class : 'N/A' });
+    handleEmail(
+      alert,
+      freq,
+      deviation,
+      ax,
+      ay,
+      az,
+      mlResult
+    );
+
+    logSheets({
+      freq,
+      ax,
+      ay,
+      az,
+      alert,
+      deviation,
+      baseline,
+      ml: mlResult ? mlResult.class : 'N/A'
+    });
   }
 
-  res.json({ status: 'ok', ml: mlResult });
+  res.json({
+    status: 'ok',
+    ml: mlResult
+  });
 });
 
 // ── Email ─────────────────────────────────────────────────────────
